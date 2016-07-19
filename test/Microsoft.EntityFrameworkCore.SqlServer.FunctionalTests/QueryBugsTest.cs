@@ -1156,6 +1156,105 @@ WHERE ([c].[FirstName] = @__firstName_0) AND ([c].[LastName] = @__8__locals1_det
             public string Name { get; set; }
         }
 
+        [Fact]
+        public void GroupJoin_with_complex_subquery_and_LOJ_does_not_get_flattened_4749()
+        {
+            CreateDatabase4749();
+
+            var loggingFactory = new TestSqlLoggerFactory();
+            var serviceProvider = new ServiceCollection()
+                .AddEntityFrameworkSqlServer()
+                .AddSingleton<ILoggerFactory>(loggingFactory)
+                .BuildServiceProvider();
+
+            using (var ctx = new MyContext4749(serviceProvider))
+            {
+                var query = from qRoot in ctx.Questions
+                            join qAnswered in
+                            (
+                                from instance in ctx.ExamInstances
+                                join answered in ctx.ExamInstanceQuestions
+                                    on instance.StudentId equals 1
+                                join qVersion in ctx.Questions on answered.QuestionId equals qVersion.Id
+                                select qVersion
+                            )
+                                on qRoot.Id equals qAnswered.RootQuestionId ?? qAnswered.Id
+                                into AnsweredQuestions
+                            from qAnswered in AnsweredQuestions.DefaultIfEmpty()
+                            select qRoot;
+
+                var result = query.ToList();
+            }
+        }
+
+        private void CreateDatabase4749()
+        {
+            CreateTestStore(
+                "Repro4749",
+                _fixture.ServiceProvider,
+                (sp, co) => new MyContext4749(sp),
+                context =>
+                {
+                    var exam1 = new ExamInstance4749 { };
+                    var exam2 = new ExamInstance4749 { };
+
+                    var question1 = new Question4749 { };
+                    var question2 = new Question4749 { };
+                    var question12 = new Question4749 { RootQuestion = question1 };
+                    var question13 = new Question4749 { RootQuestion = question1 };
+
+                    var examQuestion1_1 = new ExamInstanceQuestion4749 { ExamInstance = exam1, Question = question1 };
+                    var examQuestion1_2 = new ExamInstanceQuestion4749 {  ExamInstance = exam1, Question = question2 };
+                    var examQuestion1_12 = new ExamInstanceQuestion4749 {  ExamInstance = exam1, Question = question12 };
+                    var examQuestion2_1 = new ExamInstanceQuestion4749 { ExamInstance = exam2, Question = question1 };
+                    var examQuestion2_13 = new ExamInstanceQuestion4749 { ExamInstance = exam2, Question = question13 };
+
+                    context.ExamInstances.AddRange(exam1, exam2);
+                    context.Questions.AddRange(question1, question12, question13, question2);
+                    context.ExamInstanceQuestions.AddRange(examQuestion1_1, examQuestion1_12, examQuestion1_2, examQuestion2_1, examQuestion2_13);
+                    context.SaveChanges();
+                });
+        }
+
+        public class MyContext4749 : DbContext
+        {
+            private readonly IServiceProvider _serviceProvider;
+
+            public MyContext4749(IServiceProvider serviceProvider)
+            {
+                _serviceProvider = serviceProvider;
+            }
+
+            public DbSet<Question4749> Questions { get; set; }
+            public DbSet<ExamInstance4749> ExamInstances { get; set; }
+            public DbSet<ExamInstanceQuestion4749> ExamInstanceQuestions { get; set; }
+
+            protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+                => optionsBuilder.UseSqlServer(SqlServerTestStore.CreateConnectionString("Repro4749"));
+        }
+
+        public class Question4749
+        {
+            public int Id { get; set; }
+            public int? RootQuestionId { get; set; }
+            public Question4749 RootQuestion { get; set; }
+        }
+
+        public class ExamInstance4749
+        {
+            public int Id { get; set; }
+            public int StudentId { get; set; }
+        }
+
+        public class ExamInstanceQuestion4749
+        {
+            public int Id { get; set; }
+            public int ExamInstanceId { get; set; }
+            public int QuestionId { get; set; }
+            public ExamInstance4749 ExamInstance { get; set; }
+            public Question4749 Question { get; set; }
+        }
+
         private static void CreateTestStore<TContext>(
             string databaseName,
             IServiceProvider serviceProvider,
